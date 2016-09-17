@@ -11,12 +11,9 @@ import os
 import pyrebase
 import json
 import base64
-import struct
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
-import datetime
-import time
+import csv
 
 
 def read_fuel_from_json(filename):
@@ -25,7 +22,7 @@ def read_fuel_from_json(filename):
     """
     fuel = {}
     dtime = []
-    gps = []
+    gps = []  # Missing GPS data in AMAG dataset! -> Get that from ContoVista
 
     with open(filename, 'r') as f:
         for row in f.readlines():
@@ -45,6 +42,80 @@ def read_fuel_from_json(filename):
     # print fuel
     pd_fuel = pd.DataFrame(fuel, index=dtime)
     return pd_fuel
+
+
+def read_contovista_from_csv(filename):
+    dict_financial = []
+    with open(filename, 'rU') as f:  
+        csv_reader = csv.DictReader(f)
+        for row in csv_reader:
+            dict_financial.append(row)
+
+    return dict_financial
+
+
+def parse_all_fuel_files(folder):
+    list_files = os.listdir(folder)
+
+    pd_fuel = read_fuel_from_json(os.path.join(folder, list_files[1]))
+
+    for file in list_files[2:]:
+        print file
+        new_fuel = read_fuel_from_json(os.path.join(folder, file))
+        pd_fuel = pd.concat([pd_fuel, new_fuel])
+
+    # DEBUG PURPOSE
+    # print pd_fuel
+
+    plt.plot(pd_fuel, '-x')
+    plt.legend(pd_fuel.columns.values, loc='lower left')
+    plt.title('ENH_DASHBOARD_FUEL')
+    fig = plt.gcf()
+    fig.set_size_inches(12, 8)
+    plt.savefig('enh_dashboard_fuel.pdf')
+
+    return pd_fuel
+
+
+def process_offline(pd_fuel, dict_financial):
+    #---PARAMETER----.
+    threshold = 5.0 #| in liters, corresponds to minimum refuel volume
+    #----------------.
+    events = {}
+    headers = pd_fuel.columns.values
+
+    for header in headers:
+        events[header] = []
+        pd_fuel_nonNaN = pd_fuel[header].dropna()
+        for i, el in enumerate(pd_fuel_nonNaN):
+            diff_lt = el - pd_fuel_nonNaN[max(i-1, 0)]
+            if pd_fuel_nonNaN[i] - pd_fuel_nonNaN[i-1] > threshold:
+                events[header].append({'timestamp': str(pd_fuel_nonNaN.index[i]),
+                                       'vehicle_data': {'gps_lat': None,
+                                                        'gps_long': None,
+                                                        'lt_pump': str(diff_lt),
+                                                        'vehicle_id': header}})    
+    
+    # To fuse AMAG <-> ContoVista, you could compare GPS position in addition
+    # to timestamp
+    fin_events = {}
+    for row in dict_financial:
+        if row['ACCOUNT_ID'] not in fin_events.keys():
+            fin_events[row['ACCOUNT_ID']] = []
+        fin_events[row['ACCOUNT_ID']].append({row['TRANSACTION_DATE']: {'pfm_data': {'account_id': row['ACCOUNT_ID'],
+                                                                  'amount': row['AMOUNT'],
+                                                                  'city': row['CITY'],
+                                                                  'counterparty': row['COUNTERPARTY'],
+                                                                  'country': row['COUNTRY'],
+                                                                  'currency': row['CURRENCY'],
+                                                                  'gps_lat': row['GEO_LATITUDE'],
+                                                                  'gps_long': row['GEO_LONGITUDE'],
+                                                                  'street': row['STREET'],
+                                                                  'timestamp': row['TRANSACTION_DATE'],
+                                                                  'transaction_type': row['TRANSACTION_TYPE'],
+                                                                  'zip': row['ZIP']}}})
+        
+    return events, fin_events
 
 
 def connect_to_db(username, passwd):
@@ -69,51 +140,31 @@ def connect_to_db(username, passwd):
     return db, user
 
 
-def execute():
-    """ """
-    user = 'gabriel.cuendet@gmail.com'
-    passwd = 'fire_AS3x!985'
-    db, user = connect_to_db(user, passwd)
+def populate_db(amag_folder, cv_filename):
+    """ Parse the datasets from AMAG and ContoVista and populate the databases
+    accordingly """
+    dict_financial = read_contovista_from_csv(cv_filename)
+    pd_fuel = parse_all_fuel_files(amag_folder)
+    amag, cv = process_offline(pd_fuel, dict_financial)
 
+    username = 'gabriel.cuendet@gmail.com'
+    passwd = 'fire1234'
+    db, user = connect_to_db(username, passwd)        
 
-def parse_all_files(folder):
-    list_files = os.listdir(folder)
+    for vehicle in amag.keys():
+        usr = db.child('vehicle_id').child(vehicle).get()
+        db.child('data2').child(usr.val()).set(amag[vehicle])
 
-    pd_fuel = read_fuel_from_json(os.path.join(folder, list_files[1]))
-    print pd_fuel
-
-    for file in list_files[2:]:
-        print file
-        new_fuel = read_fuel_from_json(os.path.join(folder, file))
-        pd_fuel = pd.concat([pd_fuel, new_fuel])
-
-    # DEBUG PURPOSE
-    # print pd_fuel
-
-    plt.plot(pd_fuel,'-x')
-    plt.legend(pd_fuel.columns.values, loc='lower left')
-    plt.title('ENH_DASHBOARD_FUEL')
-    fig = plt.gcf()
-    fig.set_size_inches(12, 8)
-    plt.savefig('enh_dashboard_fuel.pdf')
-
-    return pd_fuel
-
-
-def process_fuel(pd_fuel, threshold=5.0):
-    event = {}
-    headers = pd_fuel.columns.values
-    
-    for i in pd_fuel.size:
-        if pd_fuel[i]-pd_fuel[]
-
-
-def populate_db(folder):
-    """ Parse the datasets from AMAG and populate the databases accordingly """
-    pd_fuel = parse_all_files(folder)
-    process_fuel(pd_fuel)
+    for account in cv.keys():
+        usr = db.child('account_id').child(account).get()
+        dates = db.child('data2').child(usr.val()).get()
+        for i, amag_date in enumerate(dates.val()):
+            for cv_date in cv[account]:
+                # If you wanted to match GPS as well.... that would be here!
+                if cv_date.keys()[0] in amag_date['timestamp']:
+                    db.child('data2').child(usr.val()).child(str(i)).update(cv_date[cv_date.keys()[0]])
 
 
 if __name__ == "__main__":
-    # execute()
-    populate_db('/Users/gabrielcuendet/Documents/perso/source/python/HackZurich2016/Amag/json/')
+    populate_db('/Users/gabrielcuendet/Documents/perso/source/python/HackZurich2016/Amag/json/',
+                '/Users/gabrielcuendet/Documents/perso/source/python/HackZurich2016/ContoVista/PFM_TRANSACTION_GAS.csv')
