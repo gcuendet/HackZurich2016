@@ -132,8 +132,8 @@ def connect_to_db(username, passwd):
 
     # Get a reference to the auth service
     auth = app.auth()
-    user = auth.sign_in_with_email_and_password('gabriel.cuendet@gmail.com',
-                                                'fire_AS3x!985')
+    user = auth.sign_in_with_email_and_password(username,
+                                                passwd)
 
     # Get a reference to the database service
     db = app.database()
@@ -149,7 +149,7 @@ def populate_db(amag_folder, cv_filename):
 
     username = 'gabriel.cuendet@gmail.com'
     passwd = 'fire1234'
-    db, user = connect_to_db(username, passwd)        
+    db, user = connect_to_db(username, passwd)
 
     for vehicle in amag.keys():
         usr = db.child('vehicle_id').child(vehicle).get()
@@ -159,11 +159,19 @@ def populate_db(amag_folder, cv_filename):
         usr = db.child('account_id').child(account).get()
         dates = db.child('data2').child(usr.val()).get()
         for i, amag_date in enumerate(dates.val()):
+            fillup_matched = False
+            
             for cv_date in cv[account]:
+                if fillup_matched:
+                    break
                 # If you wanted to match GPS as well.... that would be here!
                 if cv_date.keys()[0] in amag_date['timestamp']:
                     db.child('data2').child(usr.val()).child(str(i)).update(cv_date[cv_date.keys()[0]])
-
+                    fillup_matched = True
+            
+            if not fillup_matched:
+                print 'No transaction found foe the detected fill-up!'
+                # Notify user!
 
 if __name__ == "__main__":
     populate_db('/Users/gabrielcuendet/Documents/perso/source/python/HackZurich2016/Amag/json/',
